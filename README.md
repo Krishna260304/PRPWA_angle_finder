@@ -60,17 +60,14 @@ A high-precision, production-grade Python desktop application designed to measur
 
 ### Quick Start
 ```bash
-# Clone or open the project folder
+
 cd Servo
 
-# (Optional) Activate virtual environment
 python -m venv venv
 .\venv\Scripts\activate
 
-# Install dependencies
 pip install -r requirements.txt
 
-# Launch application
 python main.py
 ```
 
