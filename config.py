@@ -1,12 +1,22 @@
 from enum import Enum
 from typing import Tuple
 
-class AppState(str, Enum):
+class AppMode(str, Enum):
+    STEPPER = "Stepper"
+    SERVO = "Servo"
 
+class AppState(str, Enum):
     SET_ORIGIN = "SET_ORIGIN"
     SET_TARGET = "SET_TARGET"
     ARMED = "ARMED"
     MOVING = "MOVING"
+
+class ServoState(str, Enum):
+    SET_ORIGIN = "SET_ORIGIN"
+    SET_START = "SET_START"
+    SELECT_POINT2 = "SELECT_POINT2"
+
+DEFAULT_APP_MODE = "Stepper"
 
 AUTO_MOTION_TRIGGER_DEG = 1.8
 MOTION_SETTLE_FRAMES = 10

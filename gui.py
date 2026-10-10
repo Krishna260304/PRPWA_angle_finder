@@ -13,7 +13,7 @@ import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 
 import config
-from config import AppState
+from config import AppState, AppMode, ServoState
 from camera import CameraManager
 from vision import VisionTracker
 from angle_tracker import AngleTracker
@@ -24,7 +24,7 @@ class StepperAngleApp:
 
     def __init__(self, root: tk.Tk):
         self.root = root
-        self.root.title("Stepper Motor Angle Measurement Dashboard")
+        self.root.title("Stepper / Servo Motor Angle Measurement Dashboard")
         self.root.geometry("1480x900")
         self.root.minsize(1240, 760)
 
@@ -35,7 +35,9 @@ class StepperAngleApp:
         if self.camera_mgr.synthetic_cam:
             self.serial_ctrl.set_synthetic_camera(self.camera_mgr.synthetic_cam)
 
+        self.current_mode: str = config.DEFAULT_APP_MODE
         self.state: AppState = AppState.SET_ORIGIN
+        self.servo_state: ServoState = ServoState.SET_ORIGIN
 
         self.mouse_pos: Optional[Tuple[int, int]] = None
         self.is_mouse_over_feed: bool = False
@@ -128,9 +130,20 @@ class StepperAngleApp:
         header_frame = ttk.Frame(main_box)
         header_frame.pack(fill=tk.X, pady=(0, 6))
 
-        lbl_title = ttk.Label(header_frame, text="STEPPER MOTOR ANGLE MEASUREMENT DASHBOARD",
-                              style="Header.TLabel")
-        lbl_title.pack(side=tk.LEFT)
+        self.lbl_title = ttk.Label(header_frame, text="STEPPER MOTOR ANGLE MEASUREMENT DASHBOARD",
+                                   style="Header.TLabel")
+        self.lbl_title.pack(side=tk.LEFT)
+
+        mode_frame = ttk.Frame(header_frame)
+        mode_frame.pack(side=tk.LEFT, padx=(20, 10))
+
+        ttk.Label(mode_frame, text="Mode:", font=("Segoe UI", 10, "bold"),
+                  foreground=self.accent_blue).pack(side=tk.LEFT, padx=(0, 5))
+        self.mode_combo = ttk.Combobox(mode_frame, values=["Stepper", "Servo"],
+                                       width=10, state="readonly", font=("Segoe UI", 9, "bold"))
+        self.mode_combo.set(self.current_mode)
+        self.mode_combo.pack(side=tk.LEFT)
+        self.mode_combo.bind("<<ComboboxSelected>>", self._on_mode_changed)
 
         self.lbl_instruction = ttk.Label(
             header_frame,
@@ -236,6 +249,13 @@ class StepperAngleApp:
         action_frame = ttk.LabelFrame(parent, text=" ANGLE MEASUREMENT CONTROLS ", padding=8)
         action_frame.pack(fill=tk.X, pady=(0, 6))
 
+        self.btn_set_start_pt = ttk.Button(
+            action_frame,
+            text="SET STARTING POINT (POINT 1)",
+            style="Accent.TButton",
+            command=self.activate_servo_set_start
+        )
+
         self.btn_record_pos = ttk.Button(
             action_frame,
             text="RECORD POSITION AFTER ROTATION (MEASURE ANGLE)",
@@ -247,7 +267,7 @@ class StepperAngleApp:
         steps_box = ttk.Frame(action_frame)
         steps_box.pack(fill=tk.X, pady=3)
 
-        ttk.Label(steps_box, text="Commanded Steps (Table):", style="Card.TLabel").pack(side=tk.LEFT, padx=(0, 6))
+        ttk.Label(steps_box, text="Commanded Steps / Angle:", style="Card.TLabel").pack(side=tk.LEFT, padx=(0, 6))
         self.spin_steps = ttk.Spinbox(steps_box, from_=1, to=10000, width=8)
         self.spin_steps.set(100)
         self.spin_steps.pack(side=tk.LEFT, padx=4)
@@ -289,17 +309,9 @@ class StepperAngleApp:
         guide_tab = ttk.Frame(notebook, padding=8)
         notebook.add(guide_tab, text=" Workflow Guide ")
 
-        guide_text = (
-            "1. Click Origin O on the motor shaft center with the crosshair.\n"
-            "2. Click the black dot on the pointer arm to set Point 1 (Baseline).\n"
-            "   -> Crosshair disappears automatically!\n"
-            "3. Rotate the stepper using your external controller.\n"
-            "   -> Software automatically tracks the black dot as it rotates!\n"
-            "   -> When motor settles, angle is measured and logged to table!\n"
-            "   -> Line 1 disappears when Line 3 is drawn (strictly 2 lines on screen)!\n"
-            "   -> (Optional) Click 'RECORD POSITION' to manually force-lock."
-        )
-        ttk.Label(guide_tab, text=guide_text, justify=tk.LEFT, font=("Segoe UI", 8)).pack(anchor=tk.W)
+        self.lbl_guide = ttk.Label(guide_tab, text="", justify=tk.LEFT, font=("Segoe UI", 8))
+        self.lbl_guide.pack(anchor=tk.W)
+        self._update_guide_tab_text()
 
         sim_tab = ttk.Frame(notebook, padding=8)
         notebook.add(sim_tab, text=" Simulation Rig ")
@@ -350,7 +362,118 @@ class StepperAngleApp:
                                             foreground=self.accent_amber)
         self.stat_last_measured.pack(side=tk.RIGHT, padx=8)
 
+    def _update_guide_tab_text(self) -> None:
+        if self.current_mode == "Stepper":
+            guide_text = (
+                "1. Click Origin O on the motor shaft center with the crosshair.\n"
+                "2. Click the black dot on the pointer arm to set Point 1 (Baseline).\n"
+                "   -> Crosshair disappears automatically!\n"
+                "3. Rotate the stepper using your external controller.\n"
+                "   -> Software automatically tracks the black dot as it rotates!\n"
+                "   -> When motor settles, angle is measured and logged to table!\n"
+                "   -> Line 1 disappears when Line 3 is drawn (strictly 2 lines on screen)!\n"
+                "   -> (Optional) Click 'RECORD POSITION' to manually force-lock."
+            )
+        else:
+            guide_text = (
+                "1. Click Origin O on the motor shaft center with the crosshair.\n"
+                "2. Click the starting point (Point 1) on the servo pointer arm.\n"
+                "3. Rotate the servo motor (via external controller or Simulation Rig).\n"
+                "4. Manually click the second point (Point 2) on the video feed.\n"
+                "   -> Angle between Point 1 and Point 2 is calculated and logged to table!\n"
+                "   -> Rotate motor again and click Point 3 to measure the next angle!\n"
+                "   -> (Optional) Click 'SET STARTING POINT' to pick a new baseline."
+            )
+        if hasattr(self, "lbl_guide"):
+            self.lbl_guide.config(text=guide_text)
+
+    def _on_mode_changed(self, event=None) -> None:
+        new_mode = self.mode_combo.get()
+        if new_mode == self.current_mode:
+            return
+        self.current_mode = new_mode
+
+        if self.current_mode == "Stepper":
+            self.lbl_title.config(text="STEPPER MOTOR ANGLE MEASUREMENT DASHBOARD")
+            self._update_guide_tab_text()
+            self._configure_stepper_ui()
+        else:
+            self.lbl_title.config(text="SERVO MOTOR ANGLE MEASUREMENT DASHBOARD")
+            self._update_guide_tab_text()
+            self._configure_servo_ui()
+
+    def _configure_stepper_ui(self) -> None:
+        if hasattr(self, "btn_set_start_pt"):
+            self.btn_set_start_pt.pack_forget()
+        self.btn_record_pos.config(
+            text="RECORD POSITION AFTER ROTATION (MEASURE ANGLE)",
+            state=tk.NORMAL
+        )
+
+        if self.vision_tracker.origin is None:
+            self.activate_set_origin()
+        else:
+            if len(self.vision_tracker.locked_positions) == 0:
+                self.activate_set_target()
+            else:
+                self.state = AppState.ARMED
+                self.show_crosshair = False
+                self.video_canvas.config(cursor="")
+                self.stat_state.config(text="Mode: ARMED (Auto-Tracking Active)", foreground=self.accent_green)
+                self.lbl_instruction.config(
+                    text="Point 1 locked! Rotate motor with external controller. System will auto-track black dot and measure angles.",
+                    foreground=self.accent_green
+                )
+
+    def _configure_servo_ui(self) -> None:
+        if hasattr(self, "btn_set_start_pt"):
+            self.btn_set_start_pt.pack(fill=tk.X, pady=(2, 4), before=self.btn_record_pos)
+        self.btn_record_pos.config(
+            text="CLICK VIDEO TO SELECT POINT 2 (MEASURE ANGLE)",
+            state=tk.NORMAL
+        )
+
+        if self.vision_tracker.origin is None:
+            self.activate_servo_set_origin()
+        else:
+            if len(self.vision_tracker.locked_positions) == 0:
+                self.activate_servo_set_start()
+            else:
+                self.servo_state = ServoState.SELECT_POINT2
+                self.show_crosshair = True
+                self.video_canvas.config(cursor="crosshair")
+                num_pts = len(self.vision_tracker.locked_positions)
+                next_pt_num = num_pts + 1
+                self.stat_state.config(text="Mode: SERVO (Ready for Point 2)", foreground=self.accent_amber)
+                self.lbl_instruction.config(
+                    text=f"SERVO MODE: Rotate motor, then click on the video feed to set Point {next_pt_num}.",
+                    foreground=self.accent_amber
+                )
+
+    def activate_servo_set_origin(self) -> None:
+        self.servo_state = ServoState.SET_ORIGIN
+        self.show_crosshair = True
+        self.video_canvas.config(cursor="crosshair")
+        self.stat_state.config(text="Mode: SERVO (Set Origin)", foreground=self.accent_amber)
+        self.lbl_instruction.config(
+            text="SERVO MODE - STEP 1: Aim crosshair at motor shaft center (Origin O) and click.",
+            foreground=self.accent_amber
+        )
+
+    def activate_servo_set_start(self) -> None:
+        self.servo_state = ServoState.SET_START
+        self.show_crosshair = True
+        self.video_canvas.config(cursor="crosshair")
+        self.stat_state.config(text="Mode: SERVO (Set Point 1)", foreground=self.accent_amber)
+        self.lbl_instruction.config(
+            text="SERVO MODE - STEP 2: Aim crosshair at starting point (Point 1) and click.",
+            foreground=self.accent_amber
+        )
+
     def activate_set_origin(self) -> None:
+        if self.current_mode == "Servo":
+            self.activate_servo_set_origin()
+            return
         self.state = AppState.SET_ORIGIN
         self.show_crosshair = True
         self.video_canvas.config(cursor="crosshair")
@@ -371,6 +494,21 @@ class StepperAngleApp:
         )
 
     def manual_record_current_position(self) -> None:
+        if self.current_mode == "Servo":
+            if self.vision_tracker.origin is None:
+                messagebox.showwarning("Origin Required", "Please click the motor shaft center (Origin O) first!")
+                self.activate_servo_set_origin()
+                return
+            if len(self.vision_tracker.locked_positions) == 0:
+                messagebox.showwarning("Point 1 Required", "Please click the starting point (Point 1) first!")
+                self.activate_servo_set_start()
+                return
+            messagebox.showinfo(
+                "Manual Selection",
+                "In Servo mode, click directly on the video feed to set the second point (Point 2) after the motor rotates."
+            )
+            return
+
         if self.vision_tracker.origin is None:
             messagebox.showwarning("Origin Required", "Please click the motor shaft center (Origin O) first!")
             self.activate_set_origin()
@@ -400,6 +538,13 @@ class StepperAngleApp:
         self.stat_points.config(text="Points Marked: 0")
         self.stat_last_measured.config(text="Last Measured: --°")
 
+        if self.current_mode == "Servo":
+            if self.vision_tracker.origin is not None:
+                self.activate_servo_set_start()
+            else:
+                self.activate_servo_set_origin()
+            return
+
         if self.vision_tracker.origin is not None:
             self.activate_set_target()
         else:
@@ -415,7 +560,10 @@ class StepperAngleApp:
         self.stat_points.config(text="Points Marked: 0")
         self.stat_last_measured.config(text="Last Measured: --°")
 
-        self.activate_set_origin()
+        if self.current_mode == "Servo":
+            self.activate_servo_set_origin()
+        else:
+            self.activate_set_origin()
 
     def _on_canvas_mouse_move(self, event: tk.Event) -> None:
         self.is_mouse_over_feed = True
@@ -430,32 +578,61 @@ class StepperAngleApp:
         fx, fy = self._canvas_to_frame_coords(event.x, event.y)
         click_pt = (fx, fy)
 
-        if self.state == AppState.SET_ORIGIN:
+        if self.current_mode == "Stepper":
+            if self.state == AppState.SET_ORIGIN:
+                self.vision_tracker.set_origin(click_pt)
+                self.stat_origin.config(text=f"Origin O: ({fx}, {fy})")
+                self.activate_set_target()
 
-            self.vision_tracker.set_origin(click_pt)
-            self.stat_origin.config(text=f"Origin O: ({fx}, {fy})")
+            elif self.state == AppState.SET_TARGET:
+                ret, frame = self.camera_mgr.read()
+                if ret and frame is not None:
+                    self.vision_tracker.set_initial_target(frame, click_pt)
+                else:
+                    self.vision_tracker.set_initial_target(np.zeros((720, 1280, 3), dtype=np.uint8), click_pt)
 
-            self.activate_set_target()
+                self.stat_points.config(text="Points Marked: 1")
+                self.show_crosshair = False
+                self.video_canvas.config(cursor="")
 
-        elif self.state == AppState.SET_TARGET:
+                self.state = AppState.ARMED
+                self.stat_state.config(text="Mode: ARMED (Auto-Tracking Active)", foreground=self.accent_green)
+                self.lbl_instruction.config(
+                    text="Point 1 locked! Rotate motor with external controller. System will auto-track black dot and measure angles.",
+                    foreground=self.accent_green
+                )
+        else:
+            # Servo mode
+            if self.servo_state == ServoState.SET_ORIGIN:
+                self.vision_tracker.set_origin(click_pt)
+                self.stat_origin.config(text=f"Origin O: ({fx}, {fy})")
+                self.activate_servo_set_start()
 
-            ret, frame = self.camera_mgr.read()
-            if ret and frame is not None:
-                self.vision_tracker.set_initial_target(frame, click_pt)
-            else:
-                self.vision_tracker.set_initial_target(np.zeros((720, 1280, 3), dtype=np.uint8), click_pt)
+            elif self.servo_state == ServoState.SET_START:
+                self.vision_tracker.set_manual_start_point(click_pt)
+                self.stat_points.config(text="Points Marked: 1")
+                self.servo_state = ServoState.SELECT_POINT2
+                self.show_crosshair = True
+                self.video_canvas.config(cursor="crosshair")
+                self.stat_state.config(text="Mode: SERVO (Ready for Point 2)", foreground=self.accent_amber)
+                self.lbl_instruction.config(
+                    text="SERVO MODE - STEP 3: Rotate motor. Then click on the second point (Point 2) on the video feed.",
+                    foreground=self.accent_amber
+                )
 
-            self.stat_points.config(text="Points Marked: 1")
-
-            self.show_crosshair = False
-            self.video_canvas.config(cursor="")
-
-            self.state = AppState.ARMED
-            self.stat_state.config(text="Mode: ARMED (Auto-Tracking Active)", foreground=self.accent_green)
-            self.lbl_instruction.config(
-                text="Point 1 locked! Rotate motor with external controller. System will auto-track black dot and measure angles.",
-                foreground=self.accent_green
-            )
+            elif self.servo_state == ServoState.SELECT_POINT2:
+                rec = self.vision_tracker.add_manual_second_point(click_pt)
+                if rec is not None:
+                    self._record_measurement_row(rec)
+                    next_pt_num = len(self.vision_tracker.locked_positions) + 1
+                    self.lbl_instruction.config(
+                        text=f"Rotation {rec['rotation_num']} measured: {rec['angle_deg']:.2f}° ({rec['motion']}). Rotate motor & click Point {next_pt_num}, or click 'SET STARTING POINT'.",
+                        foreground=self.accent_green
+                    )
+                    self.stat_state.config(
+                        text=f"Mode: SERVO (Measured {rec['angle_deg']:.2f}°)",
+                        foreground=self.accent_green
+                    )
 
     def _record_measurement_row(self, rec: Dict[str, Any]) -> None:
         sno = rec["rotation_num"]
@@ -576,7 +753,14 @@ class StepperAngleApp:
             try:
                 ev_type, ev_data = self.event_queue.get_nowait()
                 if ev_type == "DONE":
-                    self.manual_record_current_position()
+                    if self.current_mode == "Stepper":
+                        self.manual_record_current_position()
+                    else:
+                        if self.servo_state == ServoState.SELECT_POINT2:
+                            self.lbl_instruction.config(
+                                text="Motor rotation complete! Click the second point (Point 2) on the video feed.",
+                                foreground=self.accent_amber
+                            )
                 elif ev_type == "ERROR":
                     messagebox.showwarning("Hardware Status", str(ev_data))
             except queue.Empty:
@@ -588,26 +772,38 @@ class StepperAngleApp:
             raw_h, raw_w = frame.shape[:2]
             self.last_frame_dims = (raw_w, raw_h)
 
-            if self.state in (AppState.ARMED, AppState.MOVING):
-                new_meas = self.vision_tracker.process_frame(frame)
-                if new_meas is not None:
-                    self._record_measurement_row(new_meas)
-                    self.lbl_instruction.config(
-                        text=f"Rotation {new_meas['rotation_num']} recorded: {new_meas['angle_deg']:.2f}° ({new_meas['motion']}). Ready for next rotation.",
-                        foreground=self.accent_green
-                    )
+            if self.current_mode == "Stepper":
+                if self.state in (AppState.ARMED, AppState.MOVING):
+                    new_meas = self.vision_tracker.process_frame(frame)
+                    if new_meas is not None:
+                        self._record_measurement_row(new_meas)
+                        self.lbl_instruction.config(
+                            text=f"Rotation {new_meas['rotation_num']} recorded: {new_meas['angle_deg']:.2f}° ({new_meas['motion']}). Ready for next rotation.",
+                            foreground=self.accent_green
+                        )
 
-                if self.vision_tracker.is_moving:
-                    self.state = AppState.MOVING
-                    self.stat_state.config(text="Mode: ROTATING (Tracking Line)", foreground=self.accent_amber)
-                else:
-                    self.state = AppState.ARMED
-                    self.stat_state.config(text="Mode: ARMED (Auto-Tracking Active)", foreground=self.accent_green)
+                    if self.vision_tracker.is_moving:
+                        self.state = AppState.MOVING
+                        self.stat_state.config(text="Mode: ROTATING (Tracking Line)", foreground=self.accent_amber)
+                    else:
+                        self.state = AppState.ARMED
+                        self.stat_state.config(text="Mode: ARMED (Auto-Tracking Active)", foreground=self.accent_green)
+
+            preview_pt = (
+                self.mouse_pos
+                if (
+                    self.current_mode == "Servo"
+                    and self.servo_state == ServoState.SELECT_POINT2
+                    and self.is_mouse_over_feed
+                )
+                else None
+            )
 
             self.vision_tracker.render_overlays(
                 frame,
                 mouse_pos=self.mouse_pos if self.is_mouse_over_feed else None,
-                show_crosshair=self.show_crosshair
+                show_crosshair=self.show_crosshair,
+                preview_point=preview_pt
             )
 
             step_instruction = self.lbl_instruction.cget("text")

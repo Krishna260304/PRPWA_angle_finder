@@ -161,6 +161,83 @@ class VisionTracker:
         self.is_moving = False
         return target_pt
 
+    def set_manual_start_point(self, click_pt: Tuple[int, int]) -> Tuple[int, int]:
+        if self.origin is None:
+            return click_pt
+
+        ox, oy = self.origin
+        cx, cy = click_pt
+        self.radius = math.hypot(cx - ox, cy - oy)
+        target_pt = click_pt
+        self.current_pt = target_pt
+        p1_angle = AngleTracker.point_to_angle(self.origin, click_pt)
+        self.current_angle = p1_angle
+        self._filtered_angle = p1_angle
+        self.last_frame_dot_angle = p1_angle
+        self.accumulated_rotation_deg = 0.0
+        self._motion_trigger_count = 0
+
+        p1 = {
+            "num": 1,
+            "pt": target_pt,
+            "angle": p1_angle
+        }
+        self.locked_positions = [p1]
+        self.measurements.clear()
+        self.recent_angles.clear()
+        self.is_moving = False
+        return target_pt
+
+    def add_manual_second_point(self, click_pt: Tuple[int, int]) -> Optional[Dict[str, Any]]:
+        if self.origin is None or not self.locked_positions:
+            return None
+
+        prev_pos = self.locked_positions[-1]
+        new_num = prev_pos["num"] + 1
+
+        curr_angle = AngleTracker.point_to_angle(self.origin, click_pt)
+        prev_angle = prev_pos["angle"]
+
+        signed_delta, abs_delta, motion = AngleTracker.calculate_angular_difference(
+            prev_angle, curr_angle
+        )
+
+        if abs_delta < 0.2:
+            return None
+
+        new_pos = {
+            "num": new_num,
+            "pt": click_pt,
+            "angle": curr_angle
+        }
+        self.locked_positions.append(new_pos)
+        self.current_pt = click_pt
+        self.current_angle = curr_angle
+        self._filtered_angle = curr_angle
+        self.last_frame_dot_angle = curr_angle
+        self.is_moving = False
+        self.recent_angles.clear()
+        self.accumulated_rotation_deg = 0.0
+
+        color_idx = (len(self.measurements)) % len(config.ROTATION_ARC_COLORS)
+        arc_color = config.ROTATION_ARC_COLORS[color_idx]
+
+        rec = {
+            "rotation_num": len(self.measurements) + 1,
+            "from_point_num": prev_pos["num"],
+            "to_point_num": new_num,
+            "from_pt": prev_pos["pt"],
+            "to_pt": new_pos["pt"],
+            "prev_angle": prev_pos["angle"],
+            "curr_angle": new_pos["angle"],
+            "signed_delta": signed_delta,
+            "angle_deg": abs_delta,
+            "motion": motion,
+            "color": arc_color
+        }
+        self.measurements.append(rec)
+        return rec
+
     def detect_black_dot(self, frame_bgr: np.ndarray,
                          frame_gray: Optional[np.ndarray] = None) -> Tuple[Optional[Tuple[int, int]], Optional[float]]:
 
@@ -409,7 +486,8 @@ class VisionTracker:
         return rec
 
     def render_overlays(self, frame: np.ndarray, mouse_pos: Optional[Tuple[int, int]],
-                        show_crosshair: bool) -> None:
+                        show_crosshair: bool,
+                        preview_point: Optional[Tuple[int, int]] = None) -> None:
 
         if self.origin is not None:
             self._draw_origin(frame, self.origin)
@@ -430,6 +508,15 @@ class VisionTracker:
                     self._draw_angle_arc(
                         frame, self.origin, p1["pt"], self.current_pt,
                         signed_delta, abs_delta, (0, 255, 255), None
+                    )
+            elif preview_point is not None:
+                self._draw_live_line(frame, self.origin, preview_point)
+                curr_a = AngleTracker.point_to_angle(self.origin, preview_point)
+                s_delta, a_delta, _ = AngleTracker.calculate_angular_difference(p1["angle"], curr_a)
+                if a_delta > 0.5:
+                    self._draw_angle_arc(
+                        frame, self.origin, p1["pt"], preview_point,
+                        s_delta, a_delta, (0, 215, 255), None
                     )
 
         elif num_locked >= 2:
@@ -452,6 +539,16 @@ class VisionTracker:
                         last_meas["signed_delta"], last_meas["angle_deg"],
                         last_meas["color"], last_meas["rotation_num"]
                     )
+
+                if preview_point is not None:
+                    self._draw_live_line(frame, self.origin, preview_point)
+                    curr_a = AngleTracker.point_to_angle(self.origin, preview_point)
+                    s_delta, a_delta, _ = AngleTracker.calculate_angular_difference(curr_pos["angle"], curr_a)
+                    if a_delta > 0.5:
+                        self._draw_angle_arc(
+                            frame, self.origin, curr_pos["pt"], preview_point,
+                            s_delta, a_delta, (0, 215, 255), None
+                        )
             else:
 
                 self._draw_radial_line(frame, self.origin, curr_pos["pt"])
